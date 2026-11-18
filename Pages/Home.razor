@@ -1,0 +1,225 @@
+@page "/"
+@using System.Net
+@using System.Text.Json
+@using System.Text.RegularExpressions
+@using BlazorWasmSuperHeroApi.Models
+@inject HttpClient Http
+
+<PageTitle>Central de Heróis</PageTitle>
+
+<main class="hero-page">
+    <section class="hero-intro">
+        <span class="eyebrow"><span class="status-dot"></span> SUPERHERO DATABASE</span>
+        <h1>Conheça o universo<br /><span>dos heróis.</span></h1>
+        <p>Pesquise personagens e descubra seus poderes, origem e identidade.</p>
+    </section>
+
+    <section class="search-panel" aria-label="Busca de personagens">
+        <form @onsubmit="BuscarHerois" @onsubmit:preventDefault>
+            <label for="accessToken">Seu token de acesso</label>
+            <input id="accessToken" type="password" class="form-control token-input" @bind="token" @bind:event="oninput"
+                   placeholder="Cole aqui o token gerado no site da API" autocomplete="off" disabled="@carregando" />
+            <div class="token-help">Obtenha seu token em <a href="https://superheroapi.com/" target="_blank" rel="noopener noreferrer">superheroapi.com</a> usando sua conta GitHub. Ele fica apenas nesta sessão.</div>
+
+            <label for="heroName" class="query-label">Nome do personagem</label>
+            <div class="search-row">
+                <input id="heroName" class="form-control search-input" @bind="nome" @bind:event="oninput"
+                       placeholder="Ex.: Batman, Wonder Woman..." autocomplete="off" disabled="@carregando" />
+                <button class="btn search-button" type="submit" disabled="@carregando">
+                    @(carregando ? "Buscando..." : "Buscar heróis")
+                    @if (!carregando) { <span aria-hidden="true">↗</span> }
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <div aria-live="polite" aria-atomic="true">
+        @if (!string.IsNullOrWhiteSpace(mensagemErro))
+        {
+            <div class="feedback error" role="alert"><span>!</span> @mensagemErro</div>
+        }
+        @if (carregando)
+        {
+            <div class="feedback loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Consultando o banco de dados...</div>
+        }
+    </div>
+
+    @if (herois.Count > 0)
+    {
+        <section class="results" aria-label="Resultados da busca">
+            <div class="results-heading">
+                <div><span class="eyebrow">RESULTADOS</span><h2>@herois.Count personagem@(herois.Count == 1 ? "" : "s") encontrado@(herois.Count == 1 ? "" : "s")</h2></div>
+                @if (!string.IsNullOrWhiteSpace(termoBuscado)) { <span class="query-chip">“@termoBuscado”</span> }
+            </div>
+
+            <div class="hero-grid">
+                @foreach (var heroi in herois)
+                {
+                    <article class="hero-card">
+                        <div class="hero-art">
+                            @if (!string.IsNullOrWhiteSpace(Imagem(heroi)))
+                            {
+                                <img src="@Imagem(heroi)" alt="Retrato de @heroi.Name" loading="lazy" />
+                            }
+                            else
+                            {
+                                <div class="image-placeholder" aria-label="Imagem indisponível">✦</div>
+                            }
+                            <span class="hero-id">#@heroi.Id</span>
+                        </div>
+                        <div class="hero-details">
+                            <div class="hero-title-row">
+                                <h3>@heroi.Name</h3>
+                                <span class="alignment @Alinhamento(heroi.Biography?.Alignment)">@Texto(heroi.Biography?.Alignment)</span>
+                            </div>
+                            <p class="hero-meta">@Texto(heroi.Biography?.FullName) <span>·</span> @Texto(heroi.Biography?.Publisher)</p>
+
+                            @if (heroi.PowerStats is not null)
+                            {
+                                <div class="stats">
+                                    @foreach (var stat in Estatisticas(heroi.PowerStats))
+                                    {
+                                        <div class="stat-row">
+                                            <span>@stat.Label</span><span class="stat-value">@stat.Value</span>
+                                            <div class="stat-track"><div class="stat-fill" style="width: @(Largura(stat.Value))%"></div></div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+
+                            <div class="hero-facts">
+                                <div><span>ESPÉCIE</span><strong>@Texto(heroi.Appearance?.Race)</strong></div>
+                                <div><span>ALTURA</span><strong>@Primeiro(heroi.Appearance?.Height)</strong></div>
+                                <div><span>PESO</span><strong>@Primeiro(heroi.Appearance?.Weight)</strong></div>
+                                <div><span>OCUPAÇÃO</span><strong>@Texto(heroi.Work?.Occupation)</strong></div>
+                            </div>
+                        </div>
+                    </article>
+                }
+            </div>
+            <p class="attribution">Dados fornecidos pela <a href="https://superheroapi.com/" target="_blank" rel="noopener noreferrer">SuperHero API</a>.</p>
+        </section>
+    }
+    else if (string.IsNullOrWhiteSpace(mensagemErro) && !carregando)
+    {
+        <section class="empty-state">
+            <div class="empty-symbol">✦</div>
+            <h2>Seu próximo herói está aqui.</h2>
+            <p>Informe seu token de acesso e pesquise um nome para começar.</p>
+            <div class="suggestions"><span>EXPERIMENTE</span><button type="button" @onclick="SelecionarBatman">Batman</button><button type="button" @onclick="SelecionarSpiderMan">Spider-Man</button><button type="button" @onclick="SelecionarWonderWoman">Wonder Woman</button></div>
+        </section>
+    }
+</main>
+
+@code {
+    private string token = string.Empty;
+    private string nome = string.Empty;
+    private string? termoBuscado;
+    private string? mensagemErro;
+    private List<Hero> herois = [];
+    private bool carregando;
+
+    private static string Texto(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) || valor == "-" || valor.Equals("null", StringComparison.OrdinalIgnoreCase)
+            ? "Não informado" : valor;
+
+    private static string Primeiro(List<string>? valores) =>
+        valores is { Count: > 0 } ? Texto(valores[^1]) : "Não informado";
+
+    private static string? Imagem(Hero heroi) =>
+        heroi.Image?.Url?.Replace("httpss://", "https://", StringComparison.OrdinalIgnoreCase);
+
+    private static string Alinhamento(string? alignment) => alignment?.ToLowerInvariant() switch
+    {
+        "good" => "good", "bad" => "bad", _ => "neutral"
+    };
+
+    private static IEnumerable<(string Label, string? Value)> Estatisticas(HeroPowerStats stats) =>
+    [
+        ("INTELIGÊNCIA", stats.Intelligence), ("FORÇA", stats.Strength), ("VELOCIDADE", stats.Speed),
+        ("RESISTÊNCIA", stats.Durability), ("PODER", stats.Power), ("COMBATE", stats.Combat)
+    ];
+
+    private static int Largura(string? valor) =>
+        int.TryParse(valor, out var numero) ? Math.Clamp(numero, 0, 100) : 0;
+
+    private void SelecionarBatman() => nome = "Batman";
+    private void SelecionarSpiderMan() => nome = "Spider-Man";
+    private void SelecionarWonderWoman() => nome = "Wonder Woman";
+
+    private async Task BuscarHerois()
+    {
+        if (carregando) return;
+        mensagemErro = null;
+        herois = [];
+        termoBuscado = null;
+        var termo = nome.Trim();
+        var accessToken = token.Trim();
+
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            mensagemErro = "Informe o token de acesso gerado no site da SuperHero API.";
+            return;
+        }
+        if (!Regex.IsMatch(accessToken, @"\A[a-zA-Z0-9_-]+\z"))
+        {
+            mensagemErro = "O token contém caracteres inválidos. Confira o valor copiado no site da API.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(termo) || termo.Length > 80)
+        {
+            mensagemErro = "Digite um nome de personagem (até 80 caracteres).";
+            return;
+        }
+
+        carregando = true;
+        try
+        {
+            var url = $"{Uri.EscapeDataString(accessToken)}/search/{Uri.EscapeDataString(termo)}";
+            using var resposta = await Http.GetAsync(url);
+            if (!resposta.IsSuccessStatusCode)
+            {
+                mensagemErro = resposta.StatusCode == HttpStatusCode.Unauthorized
+                    ? "Token não autorizado. Gere ou confira seu token no site da SuperHero API."
+                    : "Não foi possível consultar a API agora. Tente novamente mais tarde.";
+                return;
+            }
+
+            var resultado = await resposta.Content.ReadFromJsonAsync<HeroSearchResponse>();
+            if (resultado is null)
+            {
+                mensagemErro = "A API retornou uma resposta vazia ou inválida.";
+                return;
+            }
+            if (!string.Equals(resultado.Response, "success", StringComparison.OrdinalIgnoreCase))
+            {
+                var erro = resultado.Error ?? string.Empty;
+                mensagemErro = erro.Contains("token", StringComparison.OrdinalIgnoreCase)
+                    ? "Token inválido ou expirado. Confira seu acesso no site da API."
+                    : "Nenhum personagem encontrado. Tente outro nome.";
+                return;
+            }
+
+            herois = resultado.Results?.Where(h => !string.IsNullOrWhiteSpace(h.Name)).ToList() ?? [];
+            termoBuscado = resultado.ResultsFor ?? termo;
+            if (herois.Count == 0)
+                mensagemErro = "Nenhum personagem encontrado para essa busca.";
+        }
+        catch (HttpRequestException)
+        {
+            mensagemErro = "Não foi possível conectar à SuperHero API. Verifique sua conexão e tente novamente.";
+        }
+        catch (OperationCanceledException)
+        {
+            mensagemErro = "A busca demorou demais. Tente novamente.";
+        }
+        catch (JsonException)
+        {
+            mensagemErro = "A API retornou dados em um formato inesperado. Tente novamente.";
+        }
+        finally
+        {
+            carregando = false;
+        }
+    }
+}
